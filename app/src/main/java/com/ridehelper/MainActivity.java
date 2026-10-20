@@ -1,3 +1,4 @@
+
 package com.ridehelper;
 
 import android.app.Activity;
@@ -10,7 +11,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
@@ -31,15 +31,15 @@ public class MainActivity extends Activity {
         TextView info = new TextView(this);
         info.setText(
             "مساعد تحليل الرحلات\n\n" +
-            "النسخة الحالية تجريبية.\n" +
-            "قراءة عروض inDrive تلقائياً لم تُفعّل بعد."
+            "النسخة التجريبية\n" +
+            "النافذة العائمة تعرض RH فقط حالياً."
         );
         info.setTextSize(18);
         info.setGravity(Gravity.CENTER);
         info.setPadding(0, 24, 0, 24);
 
         Button overlayButton = new Button(this);
-        overlayButton.setText("تفعيل النافذة العائمة");
+        overlayButton.setText("تشغيل النافذة العائمة");
 
         overlayButton.setOnClickListener(v -> {
             if (!Settings.canDrawOverlays(this)) {
@@ -49,11 +49,7 @@ public class MainActivity extends Activity {
                 );
                 startActivity(intent);
             } else {
-                Toast.makeText(
-                    this,
-                    "تم السماح بالنافذة العائمة",
-                    Toast.LENGTH_SHORT
-                ).show();
+                startService(new Intent(this, ScreenScanService.class));
             }
         });
 
