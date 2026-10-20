@@ -32,18 +32,31 @@ import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
 import java.nio.ByteBuffer;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class ScreenScanService extends Service {
 
     private static final String CHANNEL_ID = "ridehelper_scan";
     private static final int NOTIFICATION_ID = 17;
 
+    // شروط الرحلة - عدّلها حسب حاجتك
+    private static final double MAX_PICKUP_KM = 3.0;
+    private static final double MIN_PRICE_PER_KM = 3.0;
+
+    // 0 تعني عدم تطبيق حد أدنى للسعر الإجمالي.
+    // ضع هنا المبلغ الذي تريده بالدرهم، مثل 20.0 أو 30.0.
+    private static final double MIN_TOTAL_PRICE = 0.0;
+
     private WindowManager windowManager;
     private TextView floatingView;
+
     private MediaProjection projection;
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
+
     private HandlerThread scanThread;
     private Handler scanHandler;
     private TextRecognizer recognizer;
@@ -67,6 +80,7 @@ public class ScreenScanService extends Service {
         super.onCreate();
 
         createNotificationChannel();
+
         recognizer = TextRecognition.getClient(
                 TextRecognizerOptions.DEFAULT_OPTIONS);
 
@@ -136,16 +150,17 @@ public class ScreenScanService extends Service {
     }
 
     private void createFloatingView() {
-        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        windowManager =
+                (WindowManager) getSystemService(WINDOW_SERVICE);
 
         floatingView = new TextView(this);
-        floatingView.setText("RH\nجاري قراءة الشاشة...");
+        floatingView.setText("RH\nبانتظار بيانات الرحلة");
         floatingView.setTextColor(Color.WHITE);
-        floatingView.setTextSize(12);
+        floatingView.setTextSize(13);
         floatingView.setGravity(Gravity.CENTER);
-        floatingView.setMaxWidth(300);
-        floatingView.setBackgroundColor(Color.rgb(70, 70, 70));
-        floatingView.setPadding(14, 10, 14, 10);
+        floatingView.setMaxWidth(320);
+        floatingView.setPadding(18, 14, 18, 14);
+        floatingView.setBackgroundColor(Color.DKGRAY);
 
         int type = Build.VERSION.SDK_INT >= 26
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -170,15 +185,11 @@ public class ScreenScanService extends Service {
     private void startScreenCapture() {
         DisplayMetrics metrics = new DisplayMetrics();
 
-        if (Build.VERSION.SDK_INT >= 30) {
-            android.view.WindowManager wm =
-                    (android.view.WindowManager)
-                            getSystemService(WINDOW_SERVICE);
-            android.view.Display display = wm.getDefaultDisplay();
-            display.getRealMetrics(metrics);
-        } else {
-            windowManager.getDefaultDisplay().getRealMetrics(metrics);
-        }
+        android.view.WindowManager wm =
+                (android.view.WindowManager)
+                        getSystemService(WINDOW_SERVICE);
+
+        wm.getDefaultDisplay().getRealMetrics(metrics);
 
         screenWidth = metrics.widthPixels;
         screenHeight = metrics.heightPixels;
@@ -205,17 +216,18 @@ public class ScreenScanService extends Service {
     }
 
     private void readScreenImage(ImageReader reader) {
-        Image image = null;
-
         if (!processing.compareAndSet(false, true)) {
+            Image skipped = null;
             try {
-                image = reader.acquireLatestImage();
-                if (image != null) image.close();
+                skipped = reader.acquireLatestImage();
             } catch (Exception ignored) {
+            } finally {
+                if (skipped != null) skipped.close();
             }
             return;
         }
 
+        Image image = null;
         Bitmap bitmap = null;
 
         try {
@@ -231,7 +243,8 @@ public class ScreenScanService extends Service {
 
             int pixelStride = plane.getPixelStride();
             int rowStride = plane.getRowStride();
-            int rowPadding = rowStride - pixelStride * screenWidth;
+            int rowPadding =
+                    rowStride - pixelStride * screenWidth;
 
             Bitmap paddedBitmap = Bitmap.createBitmap(
                     screenWidth + rowPadding / pixelStride,
@@ -241,11 +254,13 @@ public class ScreenScanService extends Service {
             paddedBitmap.copyPixelsFromBuffer(buffer);
 
             bitmap = Bitmap.createBitmap(
-                    paddedBitmap, 0, 0, screenWidth, screenHeight);
+                    paddedBitmap, 0, 0,
+                    screenWidth, screenHeight);
 
             paddedBitmap.recycle();
 
         } catch (Exception e) {
+            if (bitmap != null) bitmap.recycle();
             processing.set(false);
         } finally {
             if (image != null) image.close();
@@ -253,45 +268,167 @@ public class ScreenScanService extends Service {
 
         if (bitmap == null) return;
 
-        Bitmap finalBitmap = bitmap;
+        final Bitmap finalBitmap = bitmap;
 
-        recognizer.process(InputImage.fromBitmap(finalBitmap, 0))
-                .addOnSuccessListener(result -> {
-                    String text = result.getText().trim();
+        try {
+            recognizer.process(InputImage.fromBitmap(finalBitmap, 0))
+                    .addOnSuccessListener(result -> {
+                        String text = result.getText();
 
-                    if (floatingView != null) {
-                        String displayText;
+                        if (text == null) text = "";
 
-                        if (text.isEmpty()) {
-                            displayText = "RH\nلم يتم العثور على نص";
-                        } else {
-                            if (text.length() > 180) {
-                                text = text.substring(0, 180);
-                            }
-                            displayText = "RH\n" + text;
-                        }
+                        // لا نصدر حكمًا قبل استخراج البيانات اللازمة.
+                        evaluateTrip(text);
+                    })
+                    .addOnFailureListener(e ->
+                            showStatus(
+                                    "تعذرت قراءة الشاشة\nحاول مجددًا",
+                                    Color.DKGRAY))
+                    .addOnCompleteListener(task -> {
+                        finalBitmap.recycle();
+                        processing.set(false);
+                    });
+        } catch (Exception e) {
+            finalBitmap.recycle();
+            processing.set(false);
+            showStatus("خطأ في تحليل الصورة", Color.DKGRAY);
+        }
+    }
 
-                        String finalText = displayText;
+    private void evaluateTrip(String text) {
+        if (text.trim().isEmpty()) {
+            showStatus("جارٍ التحليل\nلم يُقرأ أي نص",
+                    Color.DKGRAY);
+            return;
+        }
 
-                        floatingView.post(() -> {
-                            if (floatingView != null) {
-                                floatingView.setText(finalText);
-                                floatingView.setBackgroundColor(
-                                        Color.rgb(60, 60, 60));
-                            }
-                        });
-                    }
-                })
-                .addOnFailureListener(e -> {
-                    if (floatingView != null) {
-                        floatingView.post(() ->
-                                floatingView.setText("RH\nخطأ في قراءة النص"));
-                    }
-                })
-                .addOnCompleteListener(task -> {
-                    finalBitmap.recycle();
-                    processing.set(false);
-                });
+        Double price = extractPrice(text);
+        Double pickupKm = extractDistance(
+                text,
+                "(?:المسافة\\s*(?:إلى|لدى|للوصول إلى)\\s*الزبون"
+                + "|المسافة\\s*إلى\\s*الراكب"
+                + "|مسافة\\s*الالتقاط"
+                + "|pickup\\s*distance"
+                + "|distance\\s*to\\s*(?:pickup|rider))");
+
+        Double tripKm = extractDistance(
+                text,
+                "(?:مسافة\\s*الرحلة"
+                + "|المسافة\\s*الإجمالية"
+                + "|مسافة\\s*الوصول"
+                + "|trip\\s*distance"
+                + "|total\\s*distance"
+                + "|distance\\s*of\\s*trip)");
+
+        // لا يمكن تقييم الرحلة إذا كانت أي قيمة أساسية مفقودة.
+        if (price == null || pickupKm == null || tripKm == null
+                || price <= 0 || pickupKm < 0 || tripKm <= 0) {
+
+            showStatus(
+                    "غير معروف - لا تتخذ قرارًا\n"
+                    + "السعر: " + display(price)
+                    + "\nمسافة الزبون: " + display(pickupKm)
+                    + "\nمسافة الرحلة: " + display(tripKm),
+                    Color.DKGRAY);
+            return;
+        }
+
+        double pricePerKm = price / tripKm;
+
+        boolean pickupOk = pickupKm <= MAX_PICKUP_KM;
+        boolean rateOk = pricePerKm >= MIN_PRICE_PER_KM;
+        boolean totalOk = MIN_TOTAL_PRICE <= 0
+                || price >= MIN_TOTAL_PRICE;
+
+        if (pickupOk && rateOk && totalOk) {
+            showStatus(
+                    "🟢 رحلة مناسبة"
+                    + "\nالسعر: " + price + " درهم"
+                    + "\nمسافة الزبون: " + pickupKm + " كم"
+                    + "\nمسافة الرحلة: " + tripKm + " كم"
+                    + "\nالسعر/كم: "
+                    + String.format(Locale.US, "%.2f", pricePerKm),
+                    Color.rgb(20, 125, 55));
+        } else {
+            String reason = !pickupOk
+                    ? "الزبون أبعد من الحد المحدد"
+                    : !rateOk
+                    ? "السعر لكل كيلومتر منخفض"
+                    : "السعر الإجمالي أقل من الحد";
+
+            showStatus(
+                    "🔴 رحلة غير مناسبة"
+                    + "\n" + reason
+                    + "\nالسعر: " + price + " درهم"
+                    + "\nمسافة الزبون: " + pickupKm + " كم"
+                    + "\nمسافة الرحلة: " + tripKm + " كم"
+                    + "\nالسعر/كم: "
+                    + String.format(Locale.US, "%.2f", pricePerKm),
+                    Color.rgb(170, 25, 25));
+        }
+    }
+
+    private Double extractPrice(String text) {
+        // يقبل أمثلة مثل: 25 درهم، MAD 25، 25 DH.
+        Pattern pattern = Pattern.compile(
+                "(?i)(?:MAD|DH|درهم(?:ا|اً)?)\\s*"
+                + "([0-9]+(?:[.,][0-9]+)?)"
+                + "|"
+                + "([0-9]+(?:[.,][0-9]+)?)\\s*"
+                + "(?:MAD|DH|درهم(?:ا|اً)?)");
+
+        Matcher matcher = pattern.matcher(text);
+
+        if (!matcher.find()) return null;
+
+        String value = matcher.group(1) != null
+                ? matcher.group(1) : matcher.group(2);
+
+        return parseNumber(value);
+    }
+
+    private Double extractDistance(
+            String text, String labelPattern) {
+
+        // يجب أن تظهر تسمية المسافة قبل الرقم.
+        // لا نعتبر أي رقم متبوع بـ km مسافةً مؤكدة من تلقاء أنفسنا.
+        Pattern pattern = Pattern.compile(
+                "(?is)" + labelPattern
+                + "\\s*[:：-]?\\s*"
+                + "[^0-9\\n]{0,35}?"
+                + "([0-9]+(?:[.,][0-9]+)?)\\s*"
+                + "(?:km|kms|kilometers?|كم|كلم)\\b?");
+
+        Matcher matcher = pattern.matcher(text);
+
+        if (!matcher.find()) return null;
+
+        return parseNumber(matcher.group(1));
+    }
+
+    private Double parseNumber(String value) {
+        if (value == null) return null;
+
+        try {
+            return Double.parseDouble(value.replace(',', '.'));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String display(Double value) {
+        return value == null ? "غير مقروء" : value.toString();
+    }
+
+    private void showStatus(String message, int color) {
+        if (floatingView == null) return;
+
+        floatingView.post(() -> {
+            if (floatingView != null) {
+                floatingView.setText(message);
+                floatingView.setBackgroundColor(color);
+            }
+        });
     }
 
     private void createNotificationChannel() {
@@ -355,10 +492,12 @@ public class ScreenScanService extends Service {
                 windowManager.removeView(floatingView);
             } catch (Exception ignored) {
             }
+            floatingView = null;
         }
 
         if (recognizer != null) {
-            recognizer.close();
+         recognizer.close();
+            recognizer = null;
         }
 
         if (scanThread != null) {
