@@ -1,62 +1,31 @@
-
-name: Build RideHelper APK
+name: Inspect RideHelper ZIP
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  build:
+  inspect:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
-
-      - name: Locate project files
+      - name: Inspect ZIP contents
         run: |
-          echo "Repository root:"
-          pwd
+          echo "Files in repository:"
           ls -la
-          echo "Project files:"
-          find . -maxdepth 7 -type f \
-            \( -name settings.gradle -o \
-               -name build.gradle -o \
-               -name AndroidManifest.xml \) \
-            -print
 
-      - name: Check project
-        run: |
-          test -f settings.gradle
+          echo "ZIP contents:"
+          unzip -l RideHelper-phone-build.zip
 
-      - name: Install Android SDK
-        run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager | head -n 1)
-          test -n "$SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" "platforms;android-35" \
-            "build-tools;35.0.0"
+          echo "Java package declarations:"
+          unzip -p RideHelper-phone-build.zip MainActivity.java \
+            | grep -nE '^(package |import )' | head -30 || true
 
-      - name: Build APK
-        run: gradle assembleDebug --stacktrace
+          unzip -p RideHelper-phone-build.zip ScreenScanService.java \
+            | grep -nE '^(package |import )' | head -30 || true
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: RideHelper-debug-APK
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          echo "Manifest:"
+          unzip -p RideHelper-phone-build.zip AndroidManifest.xml \
+            | head -60
+            
