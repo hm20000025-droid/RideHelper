@@ -24,21 +24,19 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
 
-      - name: Install SDK packages
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Build debug APK
-        run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon assembleDebug
-          else
-            echo "Gradle wrapper not found"
-            exit 1
-          fi
+      - name: Build APK
+        run: gradle --no-daemon assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
