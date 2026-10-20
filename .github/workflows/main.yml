@@ -26,10 +26,40 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Show repository files
+      - name: Locate project files
         run: |
+          echo "Repository root:"
           pwd
           ls -la
-          find . -maxdepth 5 -type f \
-            \( -name settings.gradle -o -name build.gradle -o -name AndroidManifest.xml \) \
+          echo "Project files:"
+          find . -maxdepth 7 -type f \
+            \( -name settings.gradle -o \
+               -name build.gradle -o \
+               -name AndroidManifest.xml \) \
             -print
+
+      - name: Check project
+        run: |
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+
+      - name: Install Android SDK
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager | head -n 1)
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Build APK
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RideHelper-debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
