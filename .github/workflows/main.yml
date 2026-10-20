@@ -1,7 +1,35 @@
-      - name: Locate Android project
+
+name: Build RideHelper APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Show repository files
         run: |
           pwd
           ls -la
-          find . -maxdepth 4 \
+          find . -maxdepth 5 -type f \
             \( -name settings.gradle -o -name build.gradle -o -name AndroidManifest.xml \) \
             -print
