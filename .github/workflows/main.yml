@@ -1,31 +1,55 @@
-name: Inspect RideHelper ZIP
+
+name: Build RideHelper APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  inspect:
+  build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Inspect ZIP contents
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Install Android SDK
         run: |
-          echo "Files in repository:"
-          ls -la
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager | head -n 1)
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "platforms;android-35" \
+            "build-tools;35.0.0"
 
-          echo "ZIP contents:"
-          unzip -l RideHelper-phone-build.zip
+      - name: Verify project
+        run: |
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/ridehelper/MainActivity.java
+          test -f app/src/main/java/com/ridehelper/ScreenScanService.java
 
-          echo "Java package declarations:"
-          unzip -p RideHelper-phone-build.zip MainActivity.java \
-            | grep -nE '^(package |import )' | head -30 || true
+      - name: Build APK
+        run: gradle assembleDebug --stacktrace
 
-          unzip -p RideHelper-phone-build.zip ScreenScanService.java \
-            | grep -nE '^(package |import )' | head -30 || true
-
-          echo "Manifest:"
-          unzip -p RideHelper-phone-build.zip AndroidManifest.xml \
-            | head -60
-            
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RideHelper-debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
