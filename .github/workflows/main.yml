@@ -1,60 +1,7 @@
-
-name: Build RideHelper APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Install Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
-
-      - name: Install Android SDK components
-        shell: bash
+      - name: Locate Android project
         run: |
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager | head -n 1)
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: Android SDK manager not found"
-            exit 1
-          fi
-
-          yes | "$SDKMANAGER" --licenses || true
-
-          "$SDKMANAGER" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Check Android project files
-        run: |
-          test -f settings.gradle
-          test -f app/build.gradle
-          test -f app/src/main/AndroidManifest.xml
-
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: RideHelper-debug-APK
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          pwd
+          ls -la
+          find . -maxdepth 4 \
+            \( -name settings.gradle -o -name build.gradle -o -name AndroidManifest.xml \) \
+            -print
